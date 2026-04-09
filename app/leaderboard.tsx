@@ -2,11 +2,10 @@
 
 import { useState, useEffect, useCallback } from "react";
 import type { SheetData, EntryRow } from "@/lib/sheet";
+import { csvLine, parseSheetCSV, SHEET_ID } from "@/lib/sheet";
 
-const SHEET_ID = "1Q4WvbjPUNQ9nDUYBIMFewKTnxm4l22YyAFtwWarNIc8";
-const REFRESH_MS = 30 * 60 * 1000; // 30 min
+const REFRESH_MS = 15 * 60 * 1000;
 const TIER_LABELS = ["T1", "T2", "T3", "T4", "T5", "T6"];
-const PRIZE_PCT = [60, 30, 10];
 
 function fmt(n: number | null): string {
   if (n === null) return "–";
@@ -26,103 +25,38 @@ function rankLabel(r: number) {
   return `${r}`;
 }
 
-// Determine which 4 of 6 picks are counting (lowest scores)
-// Null scores are treated as +8 for ranking purposes
+// Which 4 of 6 picks are counting (lowest scores, null treated as +8)
 function countingIndices(scores: (number | null)[]): Set<number> {
   const withIdx = scores.map((s, i) => ({ s: s ?? 8, i }));
   withIdx.sort((a, b) => a.s - b.s);
   return new Set(withIdx.slice(0, 4).map((x) => x.i));
 }
 
-// Re-fetch from Google Sheets CSV client-side
 async function fetchLive(): Promise<SheetData | null> {
   try {
     const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&sheet=Leaderboard&t=${Date.now()}`;
     const res = await fetch(url, { cache: "no-store" });
     if (!res.ok) return null;
     const text = await res.text();
-    return parseCSV(text);
+    return parseSheetCSV(text);
   } catch {
     return null;
   }
 }
 
-function parseScore(val: string): number | null {
-  const v = val.trim();
-  if (!v || v === "#N/A" || v === "N/A" || v === "-" || v === "") return null;
-  const n = Number(v);
-  return isNaN(n) ? null : n;
-}
-
-function csvLine(line: string): string[] {
-  const result: string[] = [];
-  let cur = "";
-  let inQuote = false;
-  for (const ch of line) {
-    if (ch === '"') { inQuote = !inQuote; }
-    else if (ch === "," && !inQuote) { result.push(cur.trim()); cur = ""; }
-    else { cur += ch; }
-  }
-  result.push(cur.trim());
-  return result;
-}
-
-function parseCSV(text: string): SheetData {
-  const lines = text.split("\n").map((l) => l.replace(/\r$/, ""));
-  let lastUpdated: string | null = null;
-  const leaderboard: { name: string; total: number | null }[] = [];
-  const entries: EntryRow[] = [];
-
-  for (let i = 0; i < lines.length; i++) {
-    const cols = csvLine(lines[i]);
-    if (i === 1) {
-      const v = cols[2]?.trim();
-      if (v && v !== "#N/A") lastUpdated = v;
-    }
-    if (i >= 4 && i <= 14) {
-      const name = cols[1]?.trim();
-      if (name) leaderboard.push({ name, total: parseScore(cols[2] ?? "") });
-    }
-    if (i >= 23 && i <= 33) {
-      const name = cols[1]?.trim();
-      if (name) {
-        entries.push({
-          name,
-          total: parseScore(cols[2] ?? ""),
-          picks: [cols[3], cols[4], cols[5], cols[6], cols[7], cols[8]].map((v) => v?.trim() ?? ""),
-          scores: [cols[9], cols[10], cols[11], cols[12], cols[13], cols[14]].map((v) => parseScore(v ?? "")),
-        });
-      }
-    }
-  }
-
-  leaderboard.sort((a, b) => {
-    if (a.total === null && b.total === null) return 0;
-    if (a.total === null) return 1;
-    if (b.total === null) return -1;
-    return a.total - b.total;
-  });
-
-  return { lastUpdated, leaderboard, entries };
-}
-
 export default function Leaderboard({ data: initial }: { data: SheetData }) {
   const [data, setData] = useState<SheetData>(initial);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  const [refreshing, setRefreshing] = useState(false);
   const [lastFetch, setLastFetch] = useState<Date>(new Date());
 
   const refresh = useCallback(async () => {
-    setRefreshing(true);
     const fresh = await fetchLive();
     if (fresh) {
       setData(fresh);
       setLastFetch(new Date());
     }
-    setRefreshing(false);
   }, []);
 
-  // Auto-refresh every 30 min
   useEffect(() => {
     const t = setInterval(refresh, REFRESH_MS);
     return () => clearInterval(t);
@@ -141,12 +75,11 @@ export default function Leaderboard({ data: initial }: { data: SheetData }) {
   const entryCount = leaderboard.length;
   const pot = entryCount * 25;
 
-  // Build rank with tie handling
+  // Assign ranks with tie handling
   let rank = 1;
   const ranked = leaderboard.map((row, i) => {
     if (i > 0 && row.total !== leaderboard[i - 1].total) rank = i + 1;
-    const r = rank;
-    return { ...row, rank: r };
+    return { ...row, rank };
   });
 
   const displayTime = lastUpdated
@@ -184,7 +117,7 @@ export default function Leaderboard({ data: initial }: { data: SheetData }) {
               <span className="hero-stat-val">${pot}</span>
               <span className="hero-stat-lbl">Total Pot</span>
             </div>
-            {pot > 0 && PRIZE_PCT.map((pct, i) => (
+            {pot > 0 && [60, 30, 10].map((pct, i) => (
               <div className="hero-stat" key={i}>
                 <span className="hero-stat-val">${Math.floor(pot * pct / 100)}</span>
                 <span className="hero-stat-lbl">{["1st", "2nd", "3rd"][i]} Place</span>
@@ -196,15 +129,7 @@ export default function Leaderboard({ data: initial }: { data: SheetData }) {
         {/* ── Last updated ── */}
         <div className="last-updated fade-up s2">
           <span>{displayTime}</span>
-          <span
-            className="refresh-icon"
-            title="Refresh now"
-            onClick={refresh}
-            style={{ opacity: refreshing ? 0.4 : 1, transition: "opacity .2s" }}
-          >
-            {refreshing ? "⏳" : "↻"}
-          </span>
-          <span style={{ color: "#bbb" }}>· auto-refreshes every 30 min</span>
+          <span style={{ color: "#bbb" }}>· auto-refreshes every 15 min</span>
         </div>
 
         {/* ── Pre-tournament state ── */}
@@ -260,7 +185,6 @@ export default function Leaderboard({ data: initial }: { data: SheetData }) {
                         <td className={`lb-chevron ${isExpanded ? "open" : ""}`}>▾</td>
                       </tr>
 
-                      {/* Expanded picks row */}
                       {isExpanded && entry && (
                         <tr key={`${row.name}-expand`} className="expand-row">
                           <td colSpan={4}>
@@ -292,7 +216,7 @@ export default function Leaderboard({ data: initial }: { data: SheetData }) {
       </div>
 
       <footer className="site-footer">
-        Masters Pool 2026 · scores refresh every 30 min · data via Google Sheets
+        Masters Pool 2026 · scores refresh every 15 min · data via Google Sheets
       </footer>
     </>
   );
@@ -306,7 +230,6 @@ function PicksGrid({ entry, hasScores }: { entry: EntryRow; hasScores: boolean }
       {entry.picks.map((pick, i) => {
         const score = entry.scores[i];
         const isCounting = counting.has(i);
-        const isDropped = hasScores && !isCounting;
 
         return (
           <div
