@@ -1,7 +1,8 @@
 import { fetchSheetData } from "@/lib/sheet";
 import Leaderboard from "./leaderboard";
 
-export const revalidate = 1800; // 30 min server-side cache
+// No cache - always fetch fresh on each request
+export const revalidate = 0;
 
 export default async function Home() {
   let data;
@@ -10,6 +11,5 @@ export default async function Home() {
   } catch {
     data = { lastUpdated: null, leaderboard: [], entries: [] };
   }
-
   return <Leaderboard data={data} />;
 }
