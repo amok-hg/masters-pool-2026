@@ -39,30 +39,6 @@ export function csvLine(line: string): string[] {
   return result;
 }
 
-// A real entry row must:
-// 1. Have a name in col B
-// 2. Have col C that is a number, #N/A, or empty (not a long label like "Total score...")
-// 3. Have at least one pick in cols D-I that isn't a header label like "Tier 1", "Player selections"
-const HEADER_LABELS = ["tier 1","tier 2","tier 3","tier 4","tier 5","tier 6","player selections","scores","player 1","player 2"];
-
-function isEntryRow(cols: string[]): boolean {
-  const name = cols[1]?.trim() ?? "";
-  if (!name) return false;
-
-  // Col C should be numeric, #N/A, or blank — not a descriptive label
-  const scoreCol = cols[2]?.trim() ?? "";
-  if (scoreCol.length > 10 && isNaN(Number(scoreCol))) return false;
-
-  // Must have at least one pick that isn't a known header label
-  const picks = [cols[3], cols[4], cols[5], cols[6], cols[7], cols[8]];
-  const hasRealPick = picks.some((v) => {
-    const s = v?.trim() ?? "";
-    return s && !HEADER_LABELS.includes(s.toLowerCase());
-  });
-
-  return hasRealPick;
-}
-
 function sheetCsvUrl(sheetName: string) {
   return `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(sheetName)}`;
 }
@@ -82,34 +58,37 @@ export function parseSheetCSV(text: string): SheetData {
   let lastUpdated: string | null = null;
   const entries: EntryRow[] = [];
 
-  for (let i = 0; i < lines.length; i++) {
-    const cols = csvLine(lines[i]);
-
-    // Row 2 (index 1): last updated timestamp in col C
-    if (i === 1) {
-      const val = cols[2]?.trim();
-      if (val && val !== "#N/A") lastUpdated = val;
-    }
-
-    // Entry rows start at sheet row 24 (index 23)
-    if (i >= 23 && isEntryRow(cols)) {
-      const name = cols[1].trim();
-      const picks = [cols[3], cols[4], cols[5], cols[6], cols[7], cols[8]].map(
-        (v) => v?.trim() ?? ""
-      );
-      const scores = [cols[9], cols[10], cols[11], cols[12], cols[13], cols[14]].map(
-        (v) => parseScore(v ?? "")
-      );
-      entries.push({
-        name,
-        total: parseScore(cols[2] ?? ""),
-        picks,
-        scores,
-      });
-    }
+  // Last updated timestamp: row 2 (index 1), col C (index 2)
+  if (lines[1]) {
+    const cols = csvLine(lines[1]);
+    const val = cols[2]?.trim();
+    if (val && val !== "#N/A") lastUpdated = val;
   }
 
-  // Derive leaderboard from entries — names always match
+  // Entries: start at row 24 (index 23), stop at first empty row
+  // Col B (1) = name, Col C (2) = total
+  // Cols D-I (3-8) = picks, Cols J-O (9-14) = scores
+  for (let i = 23; i < lines.length; i++) {
+    const name = csvLine(lines[i])[1]?.trim();
+    if (!name) break;
+
+    const cols = csvLine(lines[i]);
+    const picks = [cols[3], cols[4], cols[5], cols[6], cols[7], cols[8]].map(
+      (v) => v?.trim() ?? ""
+    );
+    const scores = [cols[9], cols[10], cols[11], cols[12], cols[13], cols[14]].map(
+      (v) => parseScore(v ?? "")
+    );
+
+    entries.push({
+      name,
+      total: parseScore(cols[2] ?? ""),
+      picks,
+      scores,
+    });
+  }
+
+  // Build leaderboard from entries, sorted by score ascending
   const leaderboard = entries
     .map(({ name, total }) => ({ name, total }))
     .sort((a, b) => {
