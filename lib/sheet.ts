@@ -57,22 +57,27 @@ export function parseSheetCSV(text: string): SheetData {
 
   let lastUpdated: string | null = null;
   const entries: EntryRow[] = [];
+  let dataStarted = false;
 
-  // Last updated timestamp: row 2 (index 1), col C (index 2)
-  if (lines[1]) {
-    const cols = csvLine(lines[1]);
-    const val = cols[2]?.trim();
-    if (val && val !== "#N/A") lastUpdated = val;
-  }
+  for (let i = 0; i < lines.length; i++) {
+    const cols = csvLine(lines[i]);
 
-  // Entries: start at row 24 (index 23), stop at first empty row
-  // Col B (1) = name, Col C (2) = total
-  // Cols D-I (3-8) = picks, Cols J-O (9-14) = scores
-  for (let i = 23; i < lines.length; i++) {
-    const name = csvLine(lines[i])[1]?.trim();
+    // Row 2 (index 1): last updated timestamp in col C (index 2)
+    if (i === 1) {
+      const val = cols[2]?.trim();
+      if (val && val !== "#N/A") lastUpdated = val;
+    }
+
+    // Look for DATA_START marker in col A (index 0)
+    if (!dataStarted) {
+      if (cols[0]?.trim() === "DATA_START") dataStarted = true;
+      continue;
+    }
+
+    // Once past DATA_START, read entries until col B is empty
+    const name = cols[1]?.trim();
     if (!name) break;
 
-    const cols = csvLine(lines[i]);
     const picks = [cols[3], cols[4], cols[5], cols[6], cols[7], cols[8]].map(
       (v) => v?.trim() ?? ""
     );
@@ -88,7 +93,7 @@ export function parseSheetCSV(text: string): SheetData {
     });
   }
 
-  // Build leaderboard from entries, sorted by score ascending
+  // Derive leaderboard from entries, sorted by score ascending
   const leaderboard = entries
     .map(({ name, total }) => ({ name, total }))
     .sort((a, b) => {
